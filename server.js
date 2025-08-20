@@ -1,3 +1,4 @@
+// ===== Importaciones
 const express = require('express');
 const path = require('path');
 const cors = require('cors');
@@ -5,26 +6,27 @@ const mysql = require('mysql'); // mysql clásico
 const multer = require('multer');
 const jwt = require('jsonwebtoken');
 const Stripe = require('stripe');
+const bcrypt = require('bcrypt'); // Para producción, encriptar passwords
 
-// Cargar variables de entorno
-require('dotenv').config({ path: require('path').join(__dirname, '.env') });
+// ===== Cargar variables de entorno
+require('dotenv').config();
 
 const app = express();
-const port = 5000;
+const port = process.env.PORT || 5000;
 
-// ======= Config Stripe / Env
+// ===== Config Stripe / Env
 const JWT_SECRET = process.env.JWT_SECRET || 'supersecreto_scaps';
 const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || '';
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || '';
 const FORCE_3DS = (process.env.FORCE_3DS || '').toLowerCase() === 'true';
 const stripe = STRIPE_SECRET_KEY ? new Stripe(STRIPE_SECRET_KEY) : null;
 
-// ======= DB
+// ===== DB Config (usar variables de entorno en Render)
 const dbConfig = {
-  host: 'srv577.hstgr.io',
-  user: 'u990150337_scaps',
-  password: 'Scaps1234',
-  database: 'u990150337_scaps',
+  host: process.env.DB_HOST,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_NAME,
   connectTimeout: 10000,
   connectionLimit: 10,
   queueLimit: 0
@@ -42,7 +44,7 @@ pool.getConnection((err, connection) => {
   console.log('✅ Conexión MySQL OK!');
 });
 
-// ======= Helper para usar query con promesas
+// ===== Helper para usar query con promesas
 function queryAsync(sql, params) {
   return new Promise((resolve, reject) => {
     pool.query(sql, params, (err, results) => {
@@ -58,9 +60,14 @@ app.use((req, res, next) => {
   next();
 });
 
-// ======= Multer
+// ===== Multer (uploads)
+const uploadsDir = path.join(__dirname, 'uploads');
+// Crear carpeta uploads si no existe
+const fs = require('fs');
+if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir);
+
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, path.join(__dirname, 'uploads')),
+  destination: (req, file, cb) => cb(null, uploadsDir),
   filename: (req, file, cb) => cb(null, Date.now() + '_' + (file.originalname || 'img')),
 });
 const upload = multer({ storage });
@@ -68,9 +75,9 @@ const upload = multer({ storage });
 // Middlewares
 app.use(cors());
 app.use(express.json());
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use('/uploads', express.static(uploadsDir));
 
-// ======= Stripe Webhook
+// ===== Stripe Webhook
 app.post('/api/payments/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
   try {
     if (!stripe || !STRIPE_WEBHOOK_SECRET) return res.status(400).send('Stripe webhook no configurado');
@@ -114,8 +121,9 @@ app.post('/api/payments/webhook', express.raw({ type: 'application/json' }), asy
   }
 });
 
-// ======= Helpers Auth
+// ===== Helpers Auth
 function generarToken(payload) { return jwt.sign(payload, JWT_SECRET, { expiresIn: '8h' }); }
+
 function verificarToken(req, res, next) {
   const auth = req.headers.authorization || '';
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
@@ -124,7 +132,7 @@ function verificarToken(req, res, next) {
   catch { return res.status(401).json({ error: 'Token inválido' }); }
 }
 
-// ======= LOGIN ADMIN (para Usuario varchar)
+// ===== LOGIN ADMIN (usar bcrypt en producción)
 app.post('/api/admin/login', async (req, res) => {
   try {
     const { usuario, password } = req.body;
@@ -144,7 +152,7 @@ app.post('/api/admin/login', async (req, res) => {
   }
 });
 
-// ======= Endpoints Gorras
+// ===== Endpoints Gorras
 app.get('/api/gorras', async (req, res) => {
   try {
     const rows = await queryAsync('SELECT id, Nombre, precio, imagen, descripcion FROM gorras');
@@ -206,8 +214,7 @@ app.post('/api/payments/checkout-session', async (req, res) => {
     if (!STRIPE_SECRET_KEY || !/^sk_/.test(STRIPE_SECRET_KEY)) {
       return res.status(400).json({ error: 'STRIPE_SECRET_KEY no configurada o inválida' });
     }
-    const stripe = new Stripe(STRIPE_SECRET_KEY);
-    const force3ds = String(process.env.FORCE_3DS || '').toLowerCase() === 'true';
+
     const { productId, name, amount, currency, success_url, cancel_url } = req.body;
 
     let finalName = name;
@@ -225,7 +232,7 @@ app.post('/api/payments/checkout-session', async (req, res) => {
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
       payment_method_types: ['card'],
-      payment_method_options: { card: { request_three_d_secure: force3ds ? 'any' : 'automatic' } },
+      payment_method_options: { card: { request_three_d_secure: FORCE_3DS ? 'any' : 'automatic' } },
       line_items: [{
         price_data: { currency: currency || 'mxn', product_data: { name: finalName }, unit_amount: finalAmount },
         quantity: 1
@@ -242,5 +249,5 @@ app.post('/api/payments/checkout-session', async (req, res) => {
   }
 });
 
-// ======= Arranque
-app.listen(port, () => console.log(`API on http://localhost:${port}`));
+// ===== Arranque
+app.listen(port, () => console.log(`API corriendo en el puerto ${port}`));
